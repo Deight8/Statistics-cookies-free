@@ -1,25 +1,25 @@
 <?php
-// Zajistíme, že výstup bude HTML, ne JSON
-header('Content-Type: text/html; charset=UTF-8');
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
 
-require_once __DIR__ . '/config.php';
+$filter = $_GET['filter'] ?? 'day';
 
-// Debugging: Zobrazíme Content-Type
-header_remove("Content-Type"); // Pro jistotu odstraníme předchozí hlavičky
-header('Content-Type: text/html; charset=UTF-8');
+// Funkce pro získání správného rozsahu dat
+function getDateRange($filter) {
+    $today = date('Y-m-d');
+    if ($filter === 'week') {
+        $start = date('Y-m-d', strtotime('monday this week'));
+        $end = date('Y-m-d', strtotime('sunday this week'));
+        return "$start – $end";
+    } elseif ($filter === 'month') {
+        $start = date('Y-m-01');
+        $end = date('Y-m-t');
+        return "$start – $end";
+    }
+    return $today;
+}
 
-$range = $_GET['range'] ?? 'day';
-$data_url = "scripts/get_date_range.php?range=$range";
-
-echo "<!-- Debug: data_url = $data_url -->"; // Ověříme, že se hodnota nastavuje správně
-?>
-
-
-<?php
-require_once __DIR__ . '/config.php';
-
-$range = $_GET['range'] ?? 'day';
-$data_url = "scripts/get_date_range.php?range=$range";
+$dateRange = getDateRange($filter);
 ?>
 
 <!DOCTYPE html>
@@ -27,139 +27,167 @@ $data_url = "scripts/get_date_range.php?range=$range";
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Statistiky návštěvnosti</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <title>Statistiky návštěv</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <style>
+        body {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #sidebar {
+            width: 250px;
+            background: #f8f9fa;
+            padding: 20px;
+            border-right: 1px solid #ddd;
+        }
+        #content {
+            flex-grow: 1;
+            padding: 20px;
+        }
+        .menu-item {
+            display: block;
+            padding: 10px;
+            margin: 5px 0;
+            background: #007bff;
+            color: white;
+            text-align: center;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .menu-item:hover {
+            background: #0056b3;
+        }
+        .menu-item.active {
+            background: #0056b3;
+        }
+    </style>
 </head>
-<body class="container mt-4">
-
-    <h1 class="mb-4">Statistiky návštěvnosti</h1>
-
-    <!-- Výběr rozsahu dat -->
-    <div class="mb-3">
-        <label for="rangeSelect" class="form-label">Zvolte období:</label>
-        <select id="rangeSelect" class="form-select">
-            <option value="day" <?= ($range == 'day') ? 'selected' : '' ?>>Dnes</option>
-            <option value="week" <?= ($range == 'week') ? 'selected' : '' ?>>Týden</option>
-            <option value="month" <?= ($range == 'month') ? 'selected' : '' ?>>Měsíc</option>
-        </select>
+<body>
+    
+    <!-- Navigační menu -->
+    <div id="sidebar">
+        <h4>Statistiky</h4>
+        <div class="menu-item" onclick="loadStatistics('visited_pages')">Navštívené stránky</div>
+        <div class="menu-item" onclick="loadStatistics('acquisition')">Akvizice</div>
+        <div class="menu-item" onclick="loadStatistics('utm')">UTM Parametry</div>
+        <div class="menu-item" onclick="loadStatistics('events')">Události</div>
     </div>
 
-    <!-- Graf návštěvnosti -->
-    <div class="card mb-4">
-        <div class="card-header">Graf návštěvnosti</div>
-        <div class="card-body">
-            <canvas id="visitsChart"></canvas>
+    <!-- Hlavní obsah -->
+    <div id="content">
+        <h2 id="pageTitle" class="mb-1">Statistiky</h2>
+        <p id="dateRange" class="text-muted"><?php echo ucfirst($filter); ?> (<?php echo $dateRange; ?>)</p>
+
+        <!-- Tlačítka pro změnu filtru -->
+        <div class="mb-3">
+            <a href="javascript:void(0);" class="btn btn-primary" onclick="changeFilter('day')">Dnes</a>
+            <a href="javascript:void(0);" class="btn btn-secondary" onclick="changeFilter('week')">Tento týden</a>
+            <a href="javascript:void(0);" class="btn btn-success" onclick="changeFilter('month')">Tento měsíc</a>
         </div>
-    </div>
 
-    <!-- Tabulka návštěvníků -->
-    <div class="card mb-4">
-        <div class="card-header">Seznam návštěvníků</div>
-        <div class="card-body">
-            <table class="table table-striped">
-                <thead>
-                    <tr>
-                        <th>Datum</th>
-                        <th>IP Hash</th>
-                        <th>Referer</th>
-                        <th>User-Agent</th>
-                    </tr>
-                </thead>
-                <tbody id="visitorsTable">
-                    <tr><td colspan="4">Načítání dat...</td></tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
+        <!-- Graf -->
+        <canvas id="visitorChart" class="mb-4" style="height: 300px; max-height: 300px;"></canvas>
 
-    <!-- Tabulka událostí -->
-    <div class="card">
-        <div class="card-header">Události na webu</div>
-        <div class="card-body">
-            <table class="table table-striped">
-                <thead>
-                    <tr>
-                        <th>Datum</th>
-                        <th>Element</th>
-                        <th>Stránka</th>
-                        <th>Referer</th>
-                    </tr>
-                </thead>
-                <tbody id="eventsTable">
-                    <tr><td colspan="4">Načítání dat...</td></tr>
-                </tbody>
-            </table>
+        <!-- Dynamicky načítaná tabulka -->
+        <div id="statisticsContent">
+            <p>Vyberte statistiku z levého menu.</p>
         </div>
     </div>
 
     <script>
-        document.addEventListener("DOMContentLoaded", function () {
-            const rangeSelect = document.getElementById("rangeSelect");
-            rangeSelect.addEventListener("change", function () {
-                window.location.href = "?range=" + this.value;
-            });
+        let chart;
+        let currentFilter = "<?php echo $filter; ?>";
+        let activeStat = "visited_pages";
 
-            // Načtení dat
-            fetch("<?= $data_url ?>")
+        function loadStatistics(statType) {
+            activeStat = statType;
+            document.getElementById("pageTitle").innerText = getStatTitle(statType);
+            updateDateRange();
+
+            document.querySelectorAll(".menu-item").forEach(el => el.classList.remove("active"));
+            document.querySelector(`[onclick="loadStatistics('${statType}')"]`).classList.add("active");
+
+            let dataUrl = `scripts/${statType}_data.php?filter=${currentFilter}`;
+            console.log("📡 Načítání dat z:", dataUrl);
+
+            fetch(dataUrl)
                 .then(response => response.json())
                 .then(data => {
-                    if (data.error) {
-                        alert("Chyba: " + data.error);
+                    console.log("📊 Odpověď serveru:", data);
+                    if (!data.labels || !data.values || data.labels.length === 0) {
+                        console.error("❌ Chybí potřebná data:", data);
                         return;
                     }
-
-                    // Zpracování návštěv pro graf
-                    const visitsByDate = {};
-                    data.visitors.forEach(visit => {
-                        const date = visit.timestamp.split(" ")[0]; // Pouze datum
-                        visitsByDate[date] = (visitsByDate[date] || 0) + 1;
-                    });
-
-                    // Vykreslení grafu
-                    const ctx = document.getElementById('visitsChart').getContext('2d');
-                    new Chart(ctx, {
-                        type: 'line',
+                    
+                    let ctx = document.getElementById('visitorChart');
+                    if (!ctx) {
+                        console.error("❌ Chyba: `<canvas>` pro graf nebyl nalezen.");
+                        return;
+                    }
+                    
+                    let ctx2D = ctx.getContext('2d');
+                    if (chart) { chart.destroy(); }
+                    
+                    chart = new Chart(ctx2D, {
+                        type: 'bar',
                         data: {
-                            labels: Object.keys(visitsByDate),
+                            labels: data.labels,
                             datasets: [{
-                                label: 'Počet návštěv',
-                                data: Object.values(visitsByDate),
-                                borderColor: 'blue',
-                                fill: false
+                                label: data.label,
+                                data: data.values,
+                                backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 1
                             }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                x: { title: { display: true, text: data.xTitle } },
+                                y: { title: { display: true, text: data.yTitle } }
+                            }
                         }
                     });
-
-                    // Vyplnění tabulky návštěvníků
-                    const visitorsTable = document.getElementById("visitorsTable");
-                    visitorsTable.innerHTML = data.visitors.length ? "" : "<tr><td colspan='4'>Žádná data</td></tr>";
-                    data.visitors.forEach(visit => {
-                        const row = `<tr>
-                            <td>${visit.timestamp}</td>
-                            <td>${visit.visitor_id}</td>
-                            <td>${visit.referer || '-'}</td>
-                            <td>${visit.user_agent}</td>
-                        </tr>`;
-                        visitorsTable.innerHTML += row;
-                    });
-
-                    // Vyplnění tabulky událostí
-                    const eventsTable = document.getElementById("eventsTable");
-                    eventsTable.innerHTML = data.events.length ? "" : "<tr><td colspan='4'>Žádná data</td></tr>";
-                    data.events.forEach(event => {
-                        const row = `<tr>
-                            <td>${event.timestamp}</td>
-                            <td>${event.element}</td>
-                            <td>${event.page}</td>
-                            <td>${event.referrer || '-'}</td>
-                        </tr>`;
-                        eventsTable.innerHTML += row;
-                    });
-
+                    console.log("✅ Graf úspěšně načten.");
                 })
-                .catch(error => console.error("Chyba při načítání dat:", error));
-        });
+                .catch(error => console.error("❌ Chyba při načítání grafu:", error));
+
+            fetch(`scripts/${statType}.php?filter=${currentFilter}`)
+                .then(response => response.text())
+                .then(html => {
+                    document.getElementById("statisticsContent").innerHTML = html;
+                })
+                .catch(error => console.error("❌ Chyba při načítání statistik:", error));
+        }
+
+        function changeFilter(filter) {
+            currentFilter = filter;
+            updateDateRange();
+            loadStatistics(activeStat);
+        }
+
+        function updateDateRange() {
+            fetch(`scripts/get_date_range.php?filter=${currentFilter}`)
+                .then(response => response.text())
+                .then(dateRange => {
+                    document.getElementById("dateRange").innerText = `${currentFilter.charAt(0).toUpperCase() + currentFilter.slice(1)} (${dateRange})`;
+                })
+                .catch(error => console.error("❌ Chyba při načítání rozsahu dat:", error));
+        }
+
+        function getStatTitle(stat) {
+            switch (stat) {
+                case 'visited_pages': return "Navštívené stránky";
+                case 'acquisition': return "Akvizice";
+                case 'utm': return "UTM Parametry";
+                case 'events': return "Události";
+                default: return "Statistiky";
+            }
+        }
     </script>
 
 </body>

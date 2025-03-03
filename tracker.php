@@ -1,25 +1,36 @@
 <?php
-// Vypnutí zobrazování chyb pro bezpečnost
-ini_set('display_errors', 0);
-error_reporting(0);
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+header('Content-Type: application/json; charset=UTF-8');
 
-// Cesty k XML souborům
 $visitorsFile = __DIR__ . '/visitors.xml';
 $eventsFile = __DIR__ . '/events.xml';
 
-// Pokud byl požadavek přes AJAX (event), zpracujeme ho
+// Funkce pro načtení nebo opravu XML souboru
+function loadOrFixXML($file, $rootElement) {
+    if (!file_exists($file) || filesize($file) == 0) {
+        $xml = new SimpleXMLElement("<$rootElement></$rootElement>");
+        $xml->asXML($file);
+    } else {
+        $xml = simplexml_load_file($file);
+        if ($xml === false) {
+            $xml = new SimpleXMLElement("<$rootElement></$rootElement>");
+            $xml->asXML($file);
+        }
+    }
+    return $xml;
+}
+
+// Načtení souborů nebo jejich oprava
+$visitorsXML = loadOrFixXML($visitorsFile, "visitors");
+$eventsXML = loadOrFixXML($eventsFile, "events");
+
+// ✅ **Zpracování POST požadavku (kliknutí na událost)**
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $data = json_decode(file_get_contents("php://input"), true);
 
-    if ($data && isset($data['element']) && isset($data['page'])) {
-        if (!file_exists($eventsFile)) {
-            $xml = new SimpleXMLElement('<events></events>');
-        } else {
-            $xml = simplexml_load_file($eventsFile);
-            if (!$xml) exit(1);
-        }
-
-        $event = $xml->addChild('event');
+    if (!empty($data['element']) && !empty($data['page'])) {
+        $event = $eventsXML->addChild('event');
         $event->addChild('visitor_id', hash('sha256', $_SERVER['REMOTE_ADDR']));
         $event->addChild('element', htmlspecialchars($data['element']));
         $event->addChild('page', htmlspecialchars($data['page']));
@@ -28,71 +39,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $event->addChild('utm_medium', htmlspecialchars($data['utm_medium'] ?? ''));
         $event->addChild('utm_campaign', htmlspecialchars($data['utm_campaign'] ?? ''));
         $event->addChild('timestamp', date('c'));
-
-        $xml->asXML($eventsFile);
-        exit(0);
+        $eventsXML->asXML($eventsFile);
+        echo json_encode(["status" => "success", "message" => "Událost zaznamenána."]);
+        exit;
     }
+
+    echo json_encode(["status" => "error", "message" => "Neplatná data."]);
+    exit;
 }
 
-// Pokud byl požadavek normální (návštěva), uložíme ji do `visitors.xml`
+// ✅ **Zpracování GET požadavku (návštěva stránky)**
+$visitor_id = hash('sha256', $_SERVER['REMOTE_ADDR']);
+$screen_width = $_GET['w'] ?? '0';
+$screen_height = $_GET['h'] ?? '0';
+$screen_resolution = $screen_width . 'x' . $screen_height;
+
+// ✅ **Oprava: Zajištění, že `source` je vždy správně definován**
+$http_referer = $_SERVER['HTTP_REFERER'] ?? '';
+$js_referer = $_GET['js_referer'] ?? '';
+$source = !empty($js_referer) ? $js_referer : (!empty($http_referer) ? $http_referer : 'Přímá návštěva');
+
+// ✅ **Oprava: `language` nesmí být prázdné**
+$language = $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? 'cs';
+
+// ✅ **Vytvoření pole pro data návštěvníka**
 $visitorData = [
-    'visitor_id' => hash('sha256', $_SERVER['REMOTE_ADDR']),
+    'visitor_id' => $visitor_id,
     'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'unknown',
-    'referer' => $_SERVER['HTTP_REFERER'] ?? 'direct',
-    'source' => $_GET['js_referer'] ?? ($_SERVER['HTTP_REFERER'] ?? 'Přímá návštěva'),
-    'language' => $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? 'unknown',
-    'screen_resolution' => ($_GET['w'] ?? 'unknown') . 'x' . ($_GET['h'] ?? 'unknown'),
+    'referer' => htmlspecialchars($http_referer),
+    'source' => htmlspecialchars($source),
+    'language' => htmlspecialchars($language),
+    'screen_resolution' => $screen_resolution,
     'timestamp' => date('Y-m-d H:i:s')
 ];
 
-if (!file_exists($visitorsFile)) {
-    $xml = new SimpleXMLElement('<visitors></visitors>');
-} else {
-    $xml = simplexml_load_file($visitorsFile);
-    if (!$xml) exit(1);
-}
-
-$entry = $xml->addChild('visitor');
-foreach ($visitorData as $key => $value) {
-    $entry->addChild($key, $value);
-}
-
-$xml->asXML($visitorsFile);
-
-// Vrácení JavaScriptu do stránky
-header('Content-Type: application/javascript');
-echo <<<JS
-document.addEventListener("DOMContentLoaded", function() {
-    let referer = document.referrer ? encodeURIComponent(document.referrer) : "Přímá návštěva";
-    let url = "/deight-statistics/tracker.php?w=" + screen.width + "&h=" + screen.height + "&js_referer=" + referer;
-
-    // Sledujeme návštěvu
-    fetch(url).then(response => console.log("✅ Návštěva zaznamenána: " + referer));
-
-    // Pokud existují prvky `data-track`, sledujeme kliknutí
-    if (document.querySelector("[data-track]")) {
-        document.body.addEventListener("click", function(event) {
-            let target = event.target.closest("[data-track]");
-            if (!target) return;
-
-            let eventData = {
-                element: target.dataset.track,
-                page: window.location.href,
-                referrer: document.referrer || "Přímá návštěva",
-                utm_source: new URLSearchParams(window.location.search).get("utm_source") || "",
-                utm_medium: new URLSearchParams(window.location.search).get("utm_medium") || "",
-                utm_campaign: new URLSearchParams(window.location.search).get("utm_campaign") || "",
-                timestamp: new Date().toISOString()
-            };
-
-            fetch("/deight-statistics/tracker.php", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(eventData)
-            }).then(response => response.json())
-            .then(data => console.log("✅ Událost zaznamenána:", data))
-            .catch(error => console.error("❌ Chyba při odesílání události:", error));
-        });
+// ✅ **Oprava: Kontrola duplicity musí zahrnovat `source`, `referer` a `screen_resolution`**
+$duplicate = false;
+foreach ($visitorsXML->visitor as $existingVisitor) {
+    if (
+        (string)$existingVisitor->visitor_id === $visitor_id &&
+        (string)$existingVisitor->screen_resolution === $screen_resolution &&
+        (string)$existingVisitor->source === $source &&
+        (string)$existingVisitor->referer === $http_referer
+    ) {
+        $lastTimestamp = strtotime((string)$existingVisitor->timestamp);
+        if (time() - $lastTimestamp < 300) { // 300 sekund = 5 minut
+            $duplicate = true;
+            break;
+        }
     }
-});
-JS;
+}
+
+// ✅ **Pokud návštěvník není duplicitní, přidáme ho do `visitors.xml`**
+if (!$duplicate) {
+    $entry = $visitorsXML->addChild('visitor');
+    foreach ($visitorData as $key => $value) {
+        $entry->addChild($key, htmlspecialchars($value));
+    }
+    $visitorsXML->asXML($visitorsFile);
+}
+
+echo json_encode(["status" => "success", "message" => "Návštěva zaznamenána."]);
+exit;

@@ -1,5 +1,5 @@
 <?php
-header('Content-Type: application/json');
+header('Content-Type: application/json; charset=UTF-8');
 require_once __DIR__ . '/../config.php';
 
 $range = $_GET['range'] ?? 'day';
@@ -34,36 +34,41 @@ $events = loadXMLData(EVENTS_FILE);
 $filtered_visitors = [];
 $filtered_events = [];
 
-// Filtrování návštěvníků podle časového rozsahu
-foreach ($visitors->visitor as $visitor) {
-    $visit_date = DateTime::createFromFormat('Y-m-d H:i:s', (string)$visitor->timestamp);
-    if (!$visit_date) {
-        continue; // Pokud se nepodaří převést datum, přeskočíme záznam
-    }
-    if ($visit_date >= $start_date && $visit_date <= $today) {
-        $filtered_visitors[] = [
-            'timestamp' => $visit_date->format('Y-m-d H:i:s'),
-            'visitor_id' => (string)$visitor->visitor_id,
-            'referer' => (string)$visitor->referer,
-            'user_agent' => (string)$visitor->user_agent
-        ];
+// ✅ Přidáváme `source` do JSON odpovědi
+if ($visitors instanceof SimpleXMLElement) {
+    foreach ($visitors->visitor as $visitor) {
+        $visit_date = DateTime::createFromFormat('Y-m-d H:i:s', (string)$visitor->timestamp);
+        if (!$visit_date) {
+            continue;
+        }
+        if ($visit_date >= $start_date && $visit_date <= $today) {
+            $filtered_visitors[] = [
+                'timestamp' => $visit_date->format('Y-m-d H:i:s'),
+                'visitor_id' => (string)$visitor->visitor_id,
+                'referer' => (string)$visitor->referer,
+                'source' => (string)$visitor->source ?? 'Přímá návštěva', // ✅ OPRAVA: Přidání `source`
+                'user_agent' => (string)$visitor->user_agent
+            ];
+        }
     }
 }
 
-// Filtrování událostí podle časového rozsahu
-foreach ($events->event as $event) {
-    $event_date = DateTime::createFromFormat(DateTime::ATOM, (string)$event->timestamp);
-    if (!$event_date) {
-        continue; // Pokud se nepodaří převést datum, přeskočíme záznam
-    }
-    if ($event_date >= $start_date && $event_date <= $today) {
-        $filtered_events[] = [
-            'timestamp' => $event_date->format('Y-m-d H:i:s'),
-            'visitor_id' => (string)$event->visitor_id,
-            'element' => (string)$event->element,
-            'page' => (string)$event->page,
-            'referrer' => (string)$event->referrer
-        ];
+// Ověření, že data existují a jsou objekt SimpleXML
+if ($events instanceof SimpleXMLElement) {
+    foreach ($events->event as $event) {
+        $event_date = DateTime::createFromFormat(DateTime::ATOM, (string)$event->timestamp);
+        if (!$event_date) {
+            continue;
+        }
+        if ($event_date >= $start_date && $event_date <= $today) {
+            $filtered_events[] = [
+                'timestamp' => $event_date->format('Y-m-d H:i:s'),
+                'visitor_id' => (string)$event->visitor_id,
+                'element' => (string)$event->element,
+                'page' => (string)$event->page,
+                'referrer' => (string)$event->referrer
+            ];
+        }
     }
 }
 
